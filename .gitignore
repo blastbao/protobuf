@@ -1,3 +1,4 @@
 .cache
+.idea
 vendor
 cmd/protoc-gen-go/protoc-gen-go

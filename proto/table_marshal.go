@@ -44,12 +44,21 @@ import (
 	"unicode/utf8"
 )
 
+
+
 // a sizer takes a pointer to a field and the size of its tag, computes the size of the encoded data.
+//
+// sizer 需要一个指向某字段的指针和其标签的大小，来计算出编码数据的大小。
 type sizer func(pointer, int) int
+
 
 // a marshaler takes a byte slice, a pointer to a field, and its tag (in wire format),
 // marshals the field to the end of the slice, returns the slice and error (if any).
+//
+// marshaler 接收一个字节切片，一个指向某字段的指针，以及它的标签（wire格式）。
+// marshaler 将该字段序列化并追加存入分片的末尾，并返回分片和错误（如果有的话）。
 type marshaler func(b []byte, ptr pointer, wiretag uint64, deterministic bool) ([]byte, error)
+
 
 // marshalInfo is the information used for marshaling a message.
 type marshalInfo struct {
@@ -83,16 +92,106 @@ type marshalInfo struct {
 }
 
 // marshalFieldInfo is the information used for marshaling a field of a message.
+//
+//
+//
+//
+// #基本编码规则#
+//	Protobuf Msg 由字段（field）构成，每个字段有其规则（rule）、数据类型（type）、字段名（name）、tag，以及选项（option）。
+// 	在序列化时，field 会按照 tag 顺序，以 key-value 的格式编码成二进制数据，key 也称为 tag 。
+//	一个 field 对应一个 key-value 对，整个二进制文件就是一连串紧密排列的 key-value 对。
+//
+//	可以把序列化之后 data 里的数据想象成下面这样：
+//  	data = <k1,v1>|<k2,v2>|<k3,v3>
+//
+// #数据划分#
+//  Protobuf Msg 序列化之后，产生的二进制数据，可以划分为 6 个部分：
+// 		MSB flag
+//		tag
+//		编码后数据类型（wire type）
+//		长度（length）
+//		字段值（value）
+//		以及填充（padding）
+//
+// #Key#
+//	消息的每一个 field ，都会以key+val的形式，序列化为二进制数据。
+//	value 比较好猜测，那么 key 具体是什么呢？答案是这样：key = tag << 3 | wire_type ，也就是说 key 的前 3 个比特是 wire type ，剩下的比特是 tag 值。
+//
+//  3 bit 的 wire_type 最多只能支持8种，目前有 6 种
+//
+//		Wire Type	Meaning Used For
+//		0			Varint int32, int64, uint32, uint64, sint32, sint64, bool, enum
+//		1			64-bit fixed64, sfixed64, double
+//		2			Length-delimited string, bytes, embedded messages, packed repeated fields
+//		3			Start group groups (deprecated)
+//		4			End group groups (deprecated)
+//		5			32-bit fixed32, sfixed32, float
+//
+//	Protobuf 支持丰富的数据类型，但是编码之后，只剩下 Varint(0)、64-bit(1)、Length-delimited(2) 和 32-bit(5）这 4 种（还有两种已经废弃了，本文不讨论）类型，
+//	用 3 个比特来表示，足够了。
+//
+//  举例来说：
+// 		message Person {
+//   		int32 id = 1;
+//   		string name = 2;
+//   		string email = 3;
+//		}
+//
+//  Person 的 id ，field_number 为 1 ， wire_type 为 0 ，所以对应的 tag 为
+//		1 << 3 | 0 = 0x08
+//  Person 的 name ，field_number 为 2 ，wire_type 为 2 ，所以对应的 tag 为
+//		2 << 3 | 2 = 0x12
+//
+//
+// wire type 被如此设计，主要是为了解决一个问题，如何知道接下来 value 部分的长度（字节数），如果
+//	wire type = 0、1、5，编码为 key + 数据，只有一个数据，可能占数个字节，数据在编码时自带终止标记；
+//	wire type = 2，编码为 key + length + 数据，length 指示了数据长度，可能有多个数据，顺序排在 length 后；
+//
+//
+//
+// Protobuf 中整数是通过 varint 进行编码，移除每个字节的 MSB ，然后拼接在一起，可以得到一个含有数个字节的 buffer ，
+// 这个 buffer 该怎么解释还需要参考具体的数据类型。
+// 对于 int32 或 int64 ，正数直接按 varint 编码，数据类型为 int32 或 int64 的负数统一被编码为 10 个字节长的 varint（补码）。
+// 如果是 sint32 或 sint64 ，则采用 ZigZag 方式进行编码。
+//
+// Protobuf 中 string、嵌套 message 以及 packed repeated fields，它们的编码方式统一为 tag + length + 数据，只是数据部分有所差异。
+//
+//
+
+// 对于 int32, int64, uint32 等数据类型在序列化之后都会转为 Varints 编码, 除去两种已标记为 deprecated 的类型,
+// 目前 Protobuf 在序列化之后的消息类型(wire-type) 总共有 4 种。
+//
+// Protobuf 除了存储字段的值之外, 还存储了字段的编号以及字段在通信线路上的格式类型(wire-type), 具体的存储方式为
+//   field_num << 3 | wire type
+//
+// 即将字段标号逻辑左移 3 位, 然后与该字段的 wire type 的编号按位或, 在上表中可以看到, wire type 总共有 6 种类型,
+// 因此可以用 3 位二进制来标识, 所以低 3 位实际上存储了其后所跟的数据的 wire type, 接收端可以利用这些信息,
+// 结合 proto 文件来解码消息结构体。
+//
+// 假设 age 为 5, 由于 age 在 proto 文件中定义的是 int32 类型, 因此序列化之后它的 wire type 为 0,
+// 其字段编号为 1, 因此按照上面的计算方式, 即 1 << 3 | 0, 所以其类型和字段编号的信息只占 1 个字节,
+// 即 00001000, 后面跟上字段值 5 的 Varints 编码, 所以整个结构体序列化之后为
+//
+// 		00001000 00000101
+//      wiretag   value
+
 type marshalFieldInfo struct {
+
+
+
+	/// 这三个字段在 setTag() 函数中被设置。
 
 	// 字段的 offset
 	field field
 
-	// 目标数据类型
+	// wiretag = tag(field_num) << 3 | wire_type
 	wiretag uint64 // tag in wire format
 
-	//
+	// 计算 wiretag 占用的 varint 字节数
 	tagsize int // size of tag in wire format
+
+
+	/// 这三个字段在 setMarshaler() 函数中被设置。
 
 	//
 	sizer sizer
@@ -102,6 +201,8 @@ type marshalFieldInfo struct {
 
 	// 是否是指针
 	isPointer bool
+
+	/// 下面字段在 computeMarshalFieldInfo/computeMarshalInfo 中被设置。
 
 	// 是否是必须字段
 	required bool // field is required
@@ -132,13 +233,14 @@ var (
 // The info it returns may not necessarily initialized.
 // t is the type of the message (NOT the pointer to it).
 //
-// 获取 MarshalInfo 结构体，如果不存在则使用 message 类型 t 创建 1 个
+// 获取 MarshalInfo 结构体，如果不存在则使用 message 类型 t 创建 1 个并返回。
 func getMarshalInfo(t reflect.Type) *marshalInfo {
 	marshalInfoLock.Lock()
 	u, ok := marshalInfoMap[t]
 	if !ok {
+		// 构造新的空 marshalInfo ，保存 t 的序列化信息
 		u = &marshalInfo{
-			typ: t,
+			typ: t,	// 只需要传入 t 即可获得该对象的所有信息
 		}
 		marshalInfoMap[t] = u
 	}
@@ -146,12 +248,20 @@ func getMarshalInfo(t reflect.Type) *marshalInfo {
 	return u
 }
 
-// Size is the entry point from generated code,
-// and should be ONLY called by generated code.
+// Size is the entry point from generated code, and should be ONLY called by generated code.
 // It computes the size of encoded data of msg.
 // a is a pointer to a place to store cached marshal info.
+//
+// Size 是生成代码的入口点，应该只由生成代码调用。
+// Size 计算 msg 的编码数据的大小。
+//
+// a 是一个指针，用于存储缓存的 marshal 信息。
 func (a *InternalMessageInfo) Size(msg Message) int {
+
+
+
 	u := getMessageMarshalInfo(msg, a)
+
 	ptr := toPointer(&msg)
 	if ptr.isNil() {
 		// We get here if msg is a typed nil ((*SomeMessage)(nil)),
@@ -159,6 +269,7 @@ func (a *InternalMessageInfo) Size(msg Message) int {
 		// catch it. We don't want crash in this case.
 		return 0
 	}
+
 	return u.size(ptr)
 }
 
@@ -197,18 +308,26 @@ func getMessageMarshalInfo(msg interface{}, a *InternalMessageInfo) *marshalInfo
 
 	// 读取不到代表未保存过
 	if u == nil {
+
 		// Get marshal information from type of message.
+
+		// 获取 msg 的真实类型
 		t := reflect.ValueOf(msg).Type()
+
 		// 要求 msg 类型必须是指针
 		if t.Kind() != reflect.Ptr {
 			panic(fmt.Sprintf("cannot handle non-pointer message type %v", t))
 		}
+
 		// 根据 msg 类型创建 MarshalInfo 对象
 		u = getMarshalInfo(t.Elem())
+
 		// Store it in the cache for later users.
 		// a.marshal = u, but atomically.
 		atomicStoreMarshalInfo(&a.marshal, u)
+
 	}
+
 	return u
 }
 
@@ -216,27 +335,35 @@ func getMessageMarshalInfo(msg interface{}, a *InternalMessageInfo) *marshalInfo
 // ptr is the pointer to the message.
 func (u *marshalInfo) size(ptr pointer) int {
 
+	// 未初始化则初始化一下
 	if atomic.LoadInt32(&u.initialized) == 0 {
 		u.computeMarshalInfo()
 	}
 
 	// If the message can marshal itself, let it do it, for compatibility.
 	// NOTE: This is not efficient.
+	//
+	// 检查是否已经实现 marshal() 接口
 	if u.hasmarshaler {
 		m := ptr.asPointerTo(u.typ).Interface().(Marshaler)
 		b, _ := m.Marshal()
 		return len(b)
 	}
 
+
+	// 遍历所有 field ，统计总 size 。
 	n := 0
 	for _, f := range u.fields {
+		// 空指针则不会被序列化
 		if f.isPointer && ptr.offset(f.field).getPointer().isNil() {
 			// nil pointer always marshals to nothing
 			continue
 		}
+		// 计算当前 field 的 size
 		n += f.sizer(ptr.offset(f.field), f.tagsize)
 	}
 
+	// 扩展字段
 	if u.extensions.IsValid() {
 		e := ptr.offset(u.extensions).toExtensions()
 		if u.messageset {
@@ -246,25 +373,29 @@ func (u *marshalInfo) size(ptr pointer) int {
 		}
 	}
 
+	// 扩展字段
 	if u.v1extensions.IsValid() {
 		m := *ptr.offset(u.v1extensions).toOldExtensions()
 		n += u.sizeV1Extensions(m)
 	}
 
+	// 未识别字段
 	if u.unrecognized.IsValid() {
 		s := *ptr.offset(u.unrecognized).toBytes()
 		n += len(s)
 	}
 
 	// cache the result for use in marshal
+	// 是否需要缓存 size
 	if u.sizecache.IsValid() {
 		atomic.StoreInt32(ptr.offset(u.sizecache).toInt32(), int32(n))
 	}
+
 	return n
 }
 
-// cachedsize gets the size from cache. If there is no cache (i.e. message is not generated),
-// fall back to compute the size.
+// cachedsize gets the size from cache.
+// If there is no cache (i.e. message is not generated), fall back to compute the size.
 func (u *marshalInfo) cachedsize(ptr pointer) int {
 	if u.sizecache.IsValid() {
 		return int(atomic.LoadInt32(ptr.offset(u.sizecache).toInt32()))
@@ -330,6 +461,7 @@ func (u *marshalInfo) marshal(b []byte, ptr pointer, deterministic bool) ([]byte
 			return b, err
 		}
 	}
+
 	if u.v1extensions.IsValid() {
 		m := *ptr.offset(u.v1extensions).toOldExtensions()
 		b, err = u.appendV1Extensions(b, m, deterministic)
@@ -363,10 +495,13 @@ func (u *marshalInfo) marshal(b []byte, ptr pointer, deterministic bool) ([]byte
 		// 利用这个字段的 marshaler 进行编码
 		b, err = f.marshaler(b, ptr.offset(f.field), f.wiretag, deterministic)
 		if err != nil {
+
 			// required 字段未设置
 			if err1, ok := err.(*RequiredNotSetError); ok {
 				// Required field in submessage is not set.
 				// We record the error but keep going, to give a complete marshaling.
+				//
+				// required 字段未设置，暂时记录下错误，以便能够得到完整的错误信息。
 				if errLater == nil {
 					errLater = &RequiredNotSetError{f.name + "." + err1.field}
 				}
@@ -437,6 +572,7 @@ func (u *marshalInfo) computeMarshalInfo() {
 
 	// 获取要 marshal 的 message 类型
 	t := u.typ
+
 
 	u.unrecognized = invalidField
 	u.extensions = invalidField
@@ -620,13 +756,13 @@ func (fi *marshalFieldInfo) computeMarshalFieldInfo(f *reflect.StructField) {
 		return
 	}
 
-	// tag 编号，即 message 中设置的 string name = x，则 x 就是这个字段的 tag id
+	// tag 编号，即 message 中设置的 string name = x，则 x 就是这个字段的 tag id 。
 	tag, err := strconv.Atoi(tags[1])
 	if err != nil {
 		panic("tag is not an integer")
 	}
 
-	// 要转换成的类型：bytes，varint 等等
+	// 要转换成的类型：bytes，varint 等，目前只有 5 种 wire type
 	wt := wiretype(tags[0])
 
 	// 设置字段是 required 还是 optional
@@ -642,36 +778,57 @@ func (fi *marshalFieldInfo) computeMarshalFieldInfo(f *reflect.StructField) {
 }
 
 func (fi *marshalFieldInfo) computeOneofFieldInfo(f *reflect.StructField, oneofImplementers []interface{}) {
+
+	// 保存字段信息
 	fi.field = toField(f)
 	fi.wiretag = math.MaxInt32 // Use a large tag number, make oneofs sorted at the end. This tag will not appear on the wire.
 	fi.isPointer = true
 	fi.sizer, fi.marshaler = makeOneOfMarshaler(fi, f)
 	fi.oneofElems = make(map[reflect.Type]*marshalElemInfo)
 
+	// 字段 f 是接口类型
 	ityp := f.Type // interface type
+
+	//
 	for _, o := range oneofImplementers {
+
 		t := reflect.TypeOf(o)
+
+		// 检查 o 是否实现了 ityp 接口
 		if !t.Implements(ityp) {
 			continue
 		}
+
+		// 获取字段
 		sf := t.Elem().Field(0) // oneof implementer is a struct with a single field
+
+		// 获取 tags
 		tags := strings.Split(sf.Tag.Get("protobuf"), ",")
 		tag, err := strconv.Atoi(tags[1])
 		if err != nil {
 			panic("tag is not an integer")
 		}
+
+		// 获取 wiretype
 		wt := wiretype(tags[0])
+
+		// 获取字段 sf 的 sizer, marshaler
 		sizer, marshaler := typeMarshaler(sf.Type, tags, false, true) // oneof should not omit any zero value
+
+		// ...
 		fi.oneofElems[t.Elem()] = &marshalElemInfo{
 			wiretag:   uint64(tag)<<3 | wt,
 			tagsize:   SizeVarint(uint64(tag) << 3),
 			sizer:     sizer,
 			marshaler: marshaler,
 		}
+
 	}
 }
 
 // wiretype returns the wire encoding of the type.
+//
+// 目前只有 5 中 wire type
 func wiretype(encoding string) uint64 {
 	switch encoding {
 	case "fixed32":
@@ -689,15 +846,20 @@ func wiretype(encoding string) uint64 {
 }
 
 // setTag fills up the tag (in wire format) and its size in the info of a field.
-func (fi *marshalFieldInfo) setTag(f *reflect.StructField, tag int, wt uint64) {
+func (fi *marshalFieldInfo) setTag(f *reflect.StructField, tag int, wireType uint64) {
+
+	// 把 struct.offset 转换成 filed
 	fi.field = toField(f)
-	fi.wiretag = uint64(tag)<<3 | wt
+
+	// key = tag(field_num) << 3 | wire_type ，也就是说 key 的前 3 个比特是 wire type ，剩下的比特是 tag 值。
+	fi.wiretag = uint64(tag)<<3 | wireType
+
+	// 计算 wiretag 占用的 varint 字节数
 	fi.tagsize = SizeVarint(uint64(tag) << 3)
 }
 
 // setMarshaler fills up the sizer and marshaler in the info of a field.
 func (fi *marshalFieldInfo) setMarshaler(f *reflect.StructField, tags []string) {
-
 	switch f.Type.Kind() {
 	// map 类型字段特殊处理
 	case reflect.Map:
@@ -717,28 +879,44 @@ func (fi *marshalFieldInfo) setMarshaler(f *reflect.StructField, tags []string) 
 // typeMarshaler returns the sizer and marshaler of a given field.
 // t is the type of the field.
 // tags is the generated "protobuf" tag of the field.
+//
 // If nozero is true, zero value is not marshaled to the wire.
 // If oneof is true, it is a oneof field.
 //
-//
-//
+// 如果 nozero 为 true ，则零值不会被序列化。
+// 如果 oneof 为 true ，意味着当前字段为 oneof 字段。
 func typeMarshaler(t reflect.Type, tags []string, nozero, oneof bool) (sizer, marshaler) {
+
+	// 获取 wiretype
 	encoding := tags[0]
 
+	// 是否是指针
 	pointer := false
+
+	// 是否是切片
 	slice := false
+
+	// 如果是切片类型，解引用
 	if t.Kind() == reflect.Slice && t.Elem().Kind() != reflect.Uint8 {
 		slice = true
 		t = t.Elem()
 	}
+
+	// 如果是指针类型，解引用
 	if t.Kind() == reflect.Ptr {
 		pointer = true
 		t = t.Elem()
 	}
 
+	// 是否是 packed 类型
 	packed := false
+
+	// 是否是 proto3 类型
 	proto3 := false
+
+	// 是否需要对字符串验证 utf-8
 	validateUTF8 := true
+
 	for i := 2; i < len(tags); i++ {
 		if tags[i] == "packed" {
 			packed = true
@@ -747,22 +925,32 @@ func typeMarshaler(t reflect.Type, tags []string, nozero, oneof bool) (sizer, ma
 			proto3 = true
 		}
 	}
+
 	validateUTF8 = validateUTF8 && proto3
+
 
 	switch t.Kind() {
 	case reflect.Bool:
+
+		// 指针类型
 		if pointer {
 			return sizeBoolPtr, appendBoolPtr
 		}
+
+		// 切片类型
 		if slice {
+			// 如果是 packed 类型
 			if packed {
 				return sizeBoolPackedSlice, appendBoolPackedSlice
 			}
 			return sizeBoolSlice, appendBoolSlice
 		}
+
+		// 忽略零值
 		if nozero {
 			return sizeBoolValueNoZero, appendBoolValueNoZero
 		}
+
 		return sizeBoolValue, appendBoolValue
 	case reflect.Uint32:
 		switch encoding {
@@ -945,6 +1133,7 @@ func typeMarshaler(t reflect.Type, tags []string, nozero, oneof bool) (sizer, ma
 		}
 		return sizeFloat64Value, appendFloat64Value
 	case reflect.String:
+		//
 		if validateUTF8 {
 			if pointer {
 				return sizeStringPtr, appendUTF8StringPtr
@@ -957,6 +1146,7 @@ func typeMarshaler(t reflect.Type, tags []string, nozero, oneof bool) (sizer, ma
 			}
 			return sizeStringValue, appendUTF8StringValue
 		}
+
 		if pointer {
 			return sizeStringPtr, appendStringPtr
 		}
@@ -1404,6 +1594,8 @@ func sizeBoolValueNoZero(ptr pointer, tagsize int) int {
 	}
 	return 1 + tagsize
 }
+
+
 func sizeBoolPtr(ptr pointer, tagsize int) int {
 	p := *ptr.toBoolPtr()
 	if p == nil {
@@ -1411,10 +1603,12 @@ func sizeBoolPtr(ptr pointer, tagsize int) int {
 	}
 	return 1 + tagsize
 }
+
 func sizeBoolSlice(ptr pointer, tagsize int) int {
 	s := *ptr.toBoolSlice()
 	return (1 + tagsize) * len(s)
 }
+
 func sizeBoolPackedSlice(ptr pointer, tagsize int) int {
 	s := *ptr.toBoolSlice()
 	if len(s) == 0 {
@@ -2164,16 +2358,19 @@ func appendBoolValueNoZero(b []byte, ptr pointer, wiretag uint64, _ bool) ([]byt
 }
 
 func appendBoolPtr(b []byte, ptr pointer, wiretag uint64, _ bool) ([]byte, error) {
+
 	p := *ptr.toBoolPtr()
 	if p == nil {
 		return b, nil
 	}
+
 	b = appendVarint(b, wiretag)
 	if *p {
 		b = append(b, 1)
 	} else {
 		b = append(b, 0)
 	}
+
 	return b, nil
 }
 func appendBoolSlice(b []byte, ptr pointer, wiretag uint64, _ bool) ([]byte, error) {
@@ -2928,13 +3125,16 @@ func Marshal(pb Message) ([]byte, error) {
 // This is an alternative entry point. It is not necessary to use
 // a Buffer for most applications.
 func (p *Buffer) Marshal(pb Message) error {
+
 	var err error
+
 	if m, ok := pb.(newMarshaler); ok {
 		siz := m.XXX_Size()
 		p.grow(siz) // make sure buf has enough capacity
 		p.buf, err = m.XXX_Marshal(p.buf, p.deterministic)
 		return err
 	}
+
 	if m, ok := pb.(Marshaler); ok {
 		// If the message can marshal itself, let it do it, for compatibility.
 		// NOTE: This is not efficient.
@@ -2942,28 +3142,41 @@ func (p *Buffer) Marshal(pb Message) error {
 		p.buf = append(p.buf, b...)
 		return err
 	}
+
 	// in case somehow we didn't generate the wrapper
 	if pb == nil {
 		return ErrNil
 	}
+
 	var info InternalMessageInfo
+
+	// 计算消息 size
 	siz := info.Size(pb)
+
+	// 确保至少能够容纳 siz 个字节
 	p.grow(siz) // make sure buf has enough capacity
+
+	// 执行 Marshal ，将 pb 序列化成二进制保存到 p.bud 上
 	p.buf, err = info.Marshal(p.buf, pb, p.deterministic)
+
 	return err
 }
 
-// grow grows the buffer's capacity, if necessary, to guarantee space for
-// another n bytes. After grow(n), at least n bytes can be written to the
-// buffer without another allocation.
+// grow grows the buffer's capacity, if necessary, to guarantee space for another n bytes.
+// After grow(n), at least n bytes can be written to the buffer without another allocation.
 func (p *Buffer) grow(n int) {
+	// 是否充足
 	need := len(p.buf) + n
 	if need <= cap(p.buf) {
 		return
 	}
+
+	// 扩容 2 倍
 	newCap := len(p.buf) * 2
 	if newCap < need {
 		newCap = need
 	}
+
+	// 扩容 + 拷贝
 	p.buf = append(make([]byte, 0, newCap), p.buf...)
 }

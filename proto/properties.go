@@ -127,6 +127,9 @@ func (sp *StructProperties) Less(i, j int) bool {
 func (sp *StructProperties) Swap(i, j int) { sp.order[i], sp.order[j] = sp.order[j], sp.order[i] }
 
 // Properties represents the protocol-specific behavior of a single struct field.
+//
+//
+//
 type Properties struct {
 	Name     string // name of the field, for error messages
 	OrigName string // original name before protocol compiler (always set)
@@ -324,12 +327,16 @@ var (
 // GetProperties returns the list of properties for the type represented by t.
 // t must represent a generated struct type of a protocol message.
 func GetProperties(t reflect.Type) *StructProperties {
+
+	// 必须是结构体类型
 	if t.Kind() != reflect.Struct {
 		panic("proto: type must have kind struct")
 	}
 
 	// Most calls to GetProperties in a long-running program will be
 	// retrieving details for types we have seen before.
+
+	//
 	propertiesMu.RLock()
 	sprop, ok := propertiesMap[t]
 	propertiesMu.RUnlock()
@@ -377,6 +384,8 @@ func getPropertiesLocked(t reflect.Type) *StructProperties {
 			// Oneof fields don't use the traditional protobuf tag.
 			p.OrigName = oneof
 		}
+
+
 		prop.Prop[i] = p
 		prop.order[i] = i
 		if debug {
@@ -449,7 +458,8 @@ func getPropertiesLocked(t reflect.Type) *StructProperties {
 
 // A global registry of enum types.
 // The generated code will register the generated maps by calling RegisterEnum.
-
+//
+//
 var enumValueMaps = make(map[string]map[string]int32)
 
 // RegisterEnum is called from the generated code to install the enum descriptor

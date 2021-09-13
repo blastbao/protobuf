@@ -45,6 +45,8 @@ const unsafeAllowed = true
 
 // A field identifies a field in a struct, accessible from a pointer.
 // In this implementation, a field is identified by its byte offset from the start of the struct.
+//
+//
 type field uintptr
 
 // toField returns a field equivalent to the given reflect field.
@@ -67,6 +69,12 @@ func (f field) IsValid() bool {
 // The implementation here uses unsafe.Pointer to create a generic pointer.
 // In pointer_reflect.go we use reflect instead of unsafe to implement
 // the same (but slower) interface.
+//
+// pointer 用于新的 table-driven 编码器/解码器。
+//
+// 在 pointer_unsafe.go 中，我们使用 unsafe.Pointer 来创建一个通用指针；
+// 在 pointer_reflect.go 中，我们使用 reflect 而不是 unsafe 来实现同样的（但更慢）接口。
+//
 type pointer struct {
 	p unsafe.Pointer
 }
@@ -118,7 +126,9 @@ func (p pointer) offset(f field) pointer {
 			panic("invalid field")
 		}
 	*/
-	return pointer{p: unsafe.Pointer(uintptr(p.p) + uintptr(f))}
+	return pointer{
+		p: unsafe.Pointer(uintptr(p.p) + uintptr(f)),
+	}
 }
 
 func (p pointer) isNil() bool {

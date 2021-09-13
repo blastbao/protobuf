@@ -194,21 +194,27 @@ func (u *unmarshalInfo) unmarshal(m pointer, b []byte) error {
 		// 如果该类型有 unmarshaler 函数，则执行解码和错误处理
 		if fn := f.unmarshal; fn != nil {
 			var err error
+
 			// 从 b 解析，然后填充到 f 的对应字段
 			b, err = fn(b, m.offset(f.field), wire)
 			if err == nil {
+				// 如果字段 f 是 required 类型，当 f 完成 unmarshal ，就把其对应的 bit 置位
 				reqMask |= f.reqMask
 				continue
 			}
+
+
 			if r, ok := err.(*RequiredNotSetError); ok {
 				// Remember this error, but keep parsing. We need to produce
 				// a full parse even if a required field is missing.
 				if errLater == nil {
 					errLater = r
 				}
-				reqMask |= f.reqMask
+				reqMask |= f.reqMask // ???
 				continue
 			}
+
+			//
 			if err != errInternalBadWireType {
 				if err == errInvalidUTF8 {
 					if errLater == nil {
@@ -219,7 +225,11 @@ func (u *unmarshalInfo) unmarshal(m pointer, b []byte) error {
 				}
 				return err
 			}
+
 			// Fragments with bad wire type are treated as unknown fields.
+			//
+			//
+
 		}
 
 		// Unknown tag.
@@ -281,26 +291,30 @@ func (u *unmarshalInfo) unmarshal(m pointer, b []byte) error {
 	}
 
 	// 校验解析到的 required 字段的数量，如果与 u 中记录的不匹配，则报错
+	//
+	// 正常情况下，解析过程中处理的 required 字段和 u.reqMask 是完全相等的，如果不等，意味着缺失某些 required 字段。
 	if reqMask != u.reqMask && errLater == nil {
 		// A required field of this message is missing.
+		// 遍历所有 required fields ，检查哪些 field 缺失。
 		for _, n := range u.reqFields {
+			//
 			if reqMask&1 == 0 {
 				errLater = &RequiredNotSetError{n}
 			}
 			reqMask >>= 1
 		}
 	}
+
+
 	return errLater
 }
 
 // computeUnmarshalInfo fills in u with information for use
 // in unmarshaling protocol buffers of type u.typ.
 func (u *unmarshalInfo) computeUnmarshalInfo() {
-
 	// 加锁
 	u.lock.Lock()
 	defer u.lock.Unlock()
-
 
 	// 已初始化则直接返回
 	if u.initialized != 0 {
@@ -321,7 +335,9 @@ func (u *unmarshalInfo) computeUnmarshalInfo() {
 
 	// List of the generated type and offset for each oneof field.
 	type oneofField struct {
+		// 字段的反射类型
 		ityp  reflect.Type // interface type of oneof field
+		// 字段的字节偏移
 		field field        // offset in containing message
 	}
 
@@ -377,16 +393,19 @@ func (u *unmarshalInfo) computeUnmarshalInfo() {
 		// 普通字段
 		tags := f.Tag.Get("protobuf")
 
+		// tag 检查
 		tagArray := strings.Split(tags, ",")
 		if len(tagArray) < 2 {
 			panic("protobuf tag not enough fields in " + t.Name() + "." + f.Name + ": " + tags)
 		}
 
+		// tag 检查
 		tag, err := strconv.Atoi(tagArray[1])
 		if err != nil {
 			panic("protobuf tag field not an integer: " + tagArray[1])
 		}
 
+		// 获取字段名称
 		name := ""
 		for _, tag := range tagArray[3:] {
 			if strings.HasPrefix(tag, "name=") {
@@ -399,11 +418,17 @@ func (u *unmarshalInfo) computeUnmarshalInfo() {
 		// 获取 unmarshaler
 		unmarshal := fieldUnmarshaler(&f)
 
+
 		// Required field?
+		//
+		// 保存 required 字段
 		var reqMask uint64
 		if tagArray[2] == "req" {
+			// 当前 required 字段的 No.
 			bit := len(u.reqFields)
+			// 保存 required 字段的 name
 			u.reqFields = append(u.reqFields, name)
+			// 设置 required 字段的 bit
 			reqMask = uint64(1) << uint(bit)
 			// TODO: if we have more than 64 required fields, we end up
 			// not verifying that all required fields are present.
@@ -411,10 +436,15 @@ func (u *unmarshalInfo) computeUnmarshalInfo() {
 		}
 
 		// Store the info in the correct slot in the message.
+		//
+		//
 		u.setTag(tag, toField(&f), unmarshal, reqMask, name)
 	}
 
+
 	// Find any types associated with oneof fields.
+	//
+	// 检查 t 是否实现了 oneofFuncsIface/oneofWrappersIface 这两个接口
 	var oneofImplementers []interface{}
 	switch m := reflect.Zero(reflect.PtrTo(t)).Interface().(type) {
 	case oneofFuncsIface:
@@ -424,16 +454,23 @@ func (u *unmarshalInfo) computeUnmarshalInfo() {
 	}
 
 	for _, v := range oneofImplementers {
+
 		tptr := reflect.TypeOf(v) // *Msg_X
 		typ := tptr.Elem()        // Msg_X
 
 		f := typ.Field(0) // oneof implementers have one field
+
 		baseUnmarshal := fieldUnmarshaler(&f)
+
 		tags := strings.Split(f.Tag.Get("protobuf"), ",")
+
+		// 获取字段标号 fieldNum
 		fieldNum, err := strconv.Atoi(tags[1])
 		if err != nil {
 			panic("protobuf tag field not an integer: " + tags[1])
 		}
+
+		//
 		var name string
 		for _, tag := range tags {
 			if strings.HasPrefix(tag, "name=") {
@@ -444,7 +481,11 @@ func (u *unmarshalInfo) computeUnmarshalInfo() {
 
 		// Find the oneof field that this struct implements.
 		// Might take O(n^2) to process all of the oneofs, but who cares.
+		//
+		// 遍历 t 所包含的所有 OneOf 字段
 		for _, of := range oneofFields {
+
+			// 如果 tptr 实现了接口 of.ityp
 			if tptr.Implements(of.ityp) {
 				// We have found the corresponding interface for this struct.
 				// That lets us know where this struct should be stored
@@ -452,6 +493,7 @@ func (u *unmarshalInfo) computeUnmarshalInfo() {
 				unmarshal := makeUnmarshalOneof(typ, of.ityp, baseUnmarshal)
 				u.setTag(fieldNum, of.field, unmarshal, 0, name)
 			}
+
 		}
 
 	}
@@ -465,17 +507,29 @@ func (u *unmarshalInfo) computeUnmarshalInfo() {
 		u.extensionRanges = fn.Call(nil)[0].Interface().([]ExtensionRange)
 	}
 
+
 	// Explicitly disallow tag 0. This will ensure we flag an error
 	// when decoding a buffer of all zeros. Without this code, we
 	// would decode and skip an all-zero buffer of even length.
 	// [0 0] is [tag=0/wiretype=varint varint-encoded-0].
-	u.setTag(0, zeroField, func(b []byte, f pointer, w int) ([]byte, error) {
-		return nil, fmt.Errorf("proto: %s: illegal tag 0 (wire type %d)", t, w)
-	}, 0, "")
+	u.setTag(
+		0,
+		zeroField,
+		func(b []byte, f pointer, w int) ([]byte, error) {
+			return nil, fmt.Errorf("proto: %s: illegal tag 0 (wire type %d)", t, w)
+		},
+		0,
+		"",
+	)
+
 
 	// Set mask for required field check.
+	//
+	//
 	u.reqMask = uint64(1)<<uint(len(u.reqFields)) - 1
 
+
+	// 完成初始化
 	atomic.StoreInt32(&u.initialized, 1)
 }
 
@@ -488,10 +542,10 @@ func (u *unmarshalInfo) setTag(tag int, field field, unmarshal unmarshaler, reqM
 
 	// 字段的反序列化信息
 	i := unmarshalFieldInfo{
-		field: field,
-		unmarshal: unmarshal,
-		reqMask: reqMask,
-		name: name,
+		field: field,			// 字段字节偏移
+		unmarshal: unmarshal,	// 字段 unmarshaler
+		reqMask: reqMask,		// required 字段的位图
+		name: name,				// 字段名称
 	}
 
 	// 字段总数

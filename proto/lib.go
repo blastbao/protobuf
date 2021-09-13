@@ -356,7 +356,9 @@ type Buffer struct {
 // NewBuffer allocates a new Buffer and initializes its internal data to
 // the contents of the argument slice.
 func NewBuffer(e []byte) *Buffer {
-	return &Buffer{buf: e}
+	return &Buffer{
+		buf: e,
+	}
 }
 
 // Reset resets the Buffer, ready for marshaling a new protocol buffer.
@@ -395,6 +397,17 @@ func (p *Buffer) Bytes() []byte { return p.buf }
 // If deterministic serialization is requested, map entries will be sorted
 // by keys in lexographical order. This is an implementation detail and
 // subject to change.
+//
+//
+// SetDeterministic 设置是否使用确定性的序列化。
+//
+// 确定性序列化保证相等的 msg 将总是被序列化为相同的字节序列，这意味着：
+//  - 一个消息的重复序列化将返回相同的字节。
+//  - 同一二进制文件的不同进程（可能在不同的机器上执行不同的机器）将把相同的消息序列化为相同的字节。
+//
+// 请注意，确定性序列化不能保证跨语言有效。
+// 请注意，如果指定了确定性序列化，Map 的条目将被按字典序排序，这是一个实现细节，并且可能会有变化。
+//
 func (p *Buffer) SetDeterministic(deterministic bool) {
 	p.deterministic = deterministic
 }
@@ -610,8 +623,11 @@ func SetDefaults(pb Message) {
 
 // v is a pointer to a struct.
 func setDefaults(v reflect.Value, recur, zeros bool) {
+
+	// 获取 v 指向的对象
 	v = v.Elem()
 
+	// 根据 v 的类型获取默认值缓存
 	defaultMu.RLock()
 	dm, ok := defaults[v.Type()]
 	defaultMu.RUnlock()
@@ -756,6 +772,8 @@ type defaultMessage struct {
 	nested  []int // struct field index of nested messages
 }
 
+
+// 矢量字段
 type scalarField struct {
 	index int          // struct field index
 	kind  reflect.Kind // element type (the T in *T or []T)
@@ -765,6 +783,7 @@ type scalarField struct {
 // t is a struct type.
 func buildDefaultMessage(t reflect.Type) (dm defaultMessage) {
 
+	//
 	sprop := GetProperties(t)
 
 	for _, prop := range sprop.Prop {
@@ -801,7 +820,9 @@ func buildDefaultMessage(t reflect.Type) (dm defaultMessage) {
 //
 //
 func fieldDefault(ft reflect.Type, prop *Properties) (sf *scalarField, nestedMessage bool, err error) {
+
 	var canHaveDefault bool
+
 	switch ft.Kind() {
 	case reflect.Ptr:
 		if ft.Elem().Kind() == reflect.Struct {
@@ -809,7 +830,6 @@ func fieldDefault(ft reflect.Type, prop *Properties) (sf *scalarField, nestedMes
 		} else {
 			canHaveDefault = true // proto2 scalar field
 		}
-
 	case reflect.Slice:
 		switch ft.Elem().Kind() {
 		case reflect.Ptr:
@@ -817,7 +837,6 @@ func fieldDefault(ft reflect.Type, prop *Properties) (sf *scalarField, nestedMes
 		case reflect.Uint8:
 			canHaveDefault = true // bytes field
 		}
-
 	case reflect.Map:
 		if ft.Elem().Kind() == reflect.Ptr {
 			nestedMessage = true // map with message values
@@ -832,7 +851,9 @@ func fieldDefault(ft reflect.Type, prop *Properties) (sf *scalarField, nestedMes
 	}
 
 	// We now know that ft is a pointer or slice.
-	sf = &scalarField{kind: ft.Elem().Kind()}
+	sf = &scalarField{
+		kind: ft.Elem().Kind(),
+	}
 
 	// scalar fields without defaults
 	if !prop.HasDefault {

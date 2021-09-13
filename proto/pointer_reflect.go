@@ -74,7 +74,9 @@ type pointer struct {
 // toPointer converts an interface of pointer type to a pointer
 // that points to the same target.
 func toPointer(i *Message) pointer {
-	return pointer{v: reflect.ValueOf(*i)}
+	return pointer{
+		v: reflect.ValueOf(*i),
+	}
 }
 
 // toAddrPointer converts an interface to a pointer that points to

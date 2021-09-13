@@ -43,13 +43,18 @@ import (
 
 // Clone returns a deep copy of a protocol buffer.
 func Clone(src Message) Message {
+
+
 	in := reflect.ValueOf(src)
 	if in.IsNil() {
 		return src
 	}
+
 	out := reflect.New(in.Type().Elem())
 	dst := out.Interface().(Message)
+
 	Merge(dst, src)
+
 	return dst
 }
 
@@ -75,6 +80,8 @@ type generatedMerger interface {
 // Elements of repeated fields will be appended.
 // Merge panics if src and dst are not the same type, or if dst is nil.
 func Merge(dst, src Message) {
+
+
 	if m, ok := dst.(Merger); ok {
 		m.Merge(src)
 		return
@@ -85,31 +92,42 @@ func Merge(dst, src Message) {
 	if out.IsNil() {
 		panic("proto: nil destination")
 	}
+
 	if in.Type() != out.Type() {
 		panic(fmt.Sprintf("proto.Merge(%T, %T) type mismatch", dst, src))
 	}
+
 	if in.IsNil() {
 		return // Merge from nil src is a noop
 	}
+
+
 	if m, ok := dst.(generatedMerger); ok {
 		m.XXX_Merge(src)
 		return
 	}
+
 	mergeStruct(out.Elem(), in.Elem())
 }
 
 func mergeStruct(out, in reflect.Value) {
 	sprop := GetProperties(in.Type())
+
 	for i := 0; i < in.NumField(); i++ {
+
 		f := in.Type().Field(i)
 		if strings.HasPrefix(f.Name, "XXX_") {
 			continue
 		}
+
 		mergeAny(out.Field(i), in.Field(i), false, sprop.Prop[i])
+
 	}
 
 	if emIn, err := extendable(in.Addr().Interface()); err == nil {
+
 		emOut, _ := extendable(out.Addr().Interface())
+
 		mIn, muIn := emIn.extensionsRead()
 		if mIn != nil {
 			mOut := emOut.extensionsWrite()
@@ -117,16 +135,20 @@ func mergeStruct(out, in reflect.Value) {
 			mergeExtension(mOut, mIn)
 			muIn.Unlock()
 		}
+
 	}
+
 
 	uf := in.FieldByName("XXX_unrecognized")
 	if !uf.IsValid() {
 		return
 	}
+
 	uin := uf.Bytes()
 	if len(uin) > 0 {
 		out.FieldByName("XXX_unrecognized").SetBytes(append([]byte(nil), uin...))
 	}
+
 }
 
 // mergeAny performs a merge between two values of the same type.

@@ -177,6 +177,7 @@ func (ed *ExtensionDesc) repeated() bool {
 
 // Extension represents an extension in a message.
 type Extension struct {
+
 	// When an extension is stored in a message using SetExtension
 	// only desc and value are set. When the message is marshaled
 	// enc will be set to the encoded form of the message.
@@ -185,6 +186,7 @@ type Extension struct {
 	// extension will have only enc set. When such an extension is
 	// accessed using GetExtension (or GetExtensions) desc and value
 	// will be set.
+
 	desc *ExtensionDesc
 
 	// value is a concrete value for the extension field. Let the type of

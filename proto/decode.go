@@ -333,12 +333,15 @@ type newUnmarshaler interface {
 // to preserve and append to existing data.
 func Unmarshal(buf []byte, pb Message) error {
 	pb.Reset()
+	// pb 自己有 unmarshal 函数，实现了 newUnmarshaler 接口
 	if u, ok := pb.(newUnmarshaler); ok {
 		return u.XXX_Unmarshal(buf)
 	}
+	// pb 自己有 unmarshal 函数，实现了 Unmarshaler 接口
 	if u, ok := pb.(Unmarshaler); ok {
 		return u.Unmarshal(buf)
 	}
+	// 使用默认的 Unmarshal
 	return NewBuffer(buf).Unmarshal(pb)
 }
 

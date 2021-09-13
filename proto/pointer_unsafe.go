@@ -74,13 +74,14 @@ type pointer struct {
 // size of pointer
 var ptrSize = unsafe.Sizeof(uintptr(0))
 
-// toPointer converts an interface of pointer type to a pointer
-// that points to the same target.
+// toPointer converts an interface of pointer type to a pointer that points to the same target.
 func toPointer(i *Message) pointer {
 	// Super-tricky - read pointer out of data word of interface value.
 	// Saves ~25ns over the equivalent:
 	// return valToPointer(reflect.ValueOf(*i))
-	return pointer{p: (*[2]unsafe.Pointer)(unsafe.Pointer(i))[1]}
+	return pointer{
+		p: (*[2]unsafe.Pointer)(unsafe.Pointer(i))[1],
+	}
 }
 
 // toAddrPointer converts an interface to a pointer that points to

@@ -53,18 +53,24 @@ import (
 func (a *InternalMessageInfo) Unmarshal(msg Message, b []byte) error {
 	// Load the unmarshal information for this message type.
 	// The atomic load ensures memory consistency.
+	//
+	// 获取保存在 a 中的 unmarshal 信息
 	u := atomicLoadUnmarshalInfo(&a.unmarshal)
 	if u == nil {
 		// Slow path: find unmarshal info for msg, update a with it.
 		u = getUnmarshalInfo(reflect.TypeOf(msg).Elem())
 		atomicStoreUnmarshalInfo(&a.unmarshal, u)
 	}
+
 	// Then do the unmarshaling.
+	// 执行 unmarshal
 	err := u.unmarshal(toPointer(&msg), b)
 	return err
 }
 
 type unmarshalInfo struct {
+
+	// 结构体的反射类型
 	typ reflect.Type // type of the protobuf struct
 
 	// 0 = only typ field is initialized
@@ -88,6 +94,8 @@ type unmarshalInfo struct {
 // b is the data after the tag and wire encoding have been read.
 type unmarshaler func(b []byte, f pointer, w int) ([]byte, error)
 
+
+// 字段的反序列化信息
 type unmarshalFieldInfo struct {
 	// location of the field in the proto message structure.
 	field field
@@ -131,16 +139,27 @@ func getUnmarshalInfo(t reflect.Type) *unmarshalInfo {
 // m is a pointer to a protocol buffer message.
 // b is a byte stream to unmarshal into m.
 // This is top routine used when recursively unmarshaling submessages.
+//
+//
+//
+//
 func (u *unmarshalInfo) unmarshal(m pointer, b []byte) error {
+
 	if atomic.LoadInt32(&u.initialized) == 0 {
+		// 为 u 填充 unmarshal 信息，以及设置每个字段类型的 unmarshaler 函数
 		u.computeUnmarshalInfo()
 	}
+
+
+
 	if u.isMessageSet {
 		return unmarshalMessageSet(b, m.offset(u.extensions).toExtensions())
 	}
+
 	var reqMask uint64 // bitmask of required fields we've seen.
 	var errLater error
 	for len(b) > 0 {
+
 		// Read tag and wire type.
 		// Special case 1 and 2 byte varints.
 		var x uint64
@@ -158,18 +177,24 @@ func (u *unmarshalInfo) unmarshal(m pointer, b []byte) error {
 			}
 			b = b[n:]
 		}
+
+		// 获取 tag 和 wire 标记
 		tag := x >> 3
 		wire := int(x) & 7
 
 		// Dispatch on the tag to one of the unmarshal* functions below.
+		// 根据 tag 选择该类型的 unmarshalFieldInfo: f
 		var f unmarshalFieldInfo
 		if tag < uint64(len(u.dense)) {
 			f = u.dense[tag]
 		} else {
 			f = u.sparse[tag]
 		}
+
+		// 如果该类型有 unmarshaler 函数，则执行解码和错误处理
 		if fn := f.unmarshal; fn != nil {
 			var err error
+			// 从 b 解析，然后填充到 f 的对应字段
 			b, err = fn(b, m.offset(f.field), wire)
 			if err == nil {
 				reqMask |= f.reqMask
@@ -198,6 +223,7 @@ func (u *unmarshalInfo) unmarshal(m pointer, b []byte) error {
 		}
 
 		// Unknown tag.
+		// 跳过未知 tag ，可能是 proto 中的 message 定义升级了，增加了一些字段，使用老版本的，就不识别新的字段
 		if !u.unrecognized.IsValid() {
 			// Don't keep unrecognized data; just skip it.
 			var err error
@@ -207,8 +233,11 @@ func (u *unmarshalInfo) unmarshal(m pointer, b []byte) error {
 			}
 			continue
 		}
+
 		// Keep unrecognized data around.
 		// maybe in extensions, maybe in the unrecognized field.
+		//
+		// 检查未识别字段是不是 extension
 		z := m.offset(u.unrecognized).toBytes()
 		var emap map[int32]Extension
 		var e Extension
@@ -250,6 +279,8 @@ func (u *unmarshalInfo) unmarshal(m pointer, b []byte) error {
 			emap[int32(tag)] = e
 		}
 	}
+
+	// 校验解析到的 required 字段的数量，如果与 u 中记录的不匹配，则报错
 	if reqMask != u.reqMask && errLater == nil {
 		// A required field of this message is missing.
 		for _, n := range u.reqFields {
@@ -265,12 +296,21 @@ func (u *unmarshalInfo) unmarshal(m pointer, b []byte) error {
 // computeUnmarshalInfo fills in u with information for use
 // in unmarshaling protocol buffers of type u.typ.
 func (u *unmarshalInfo) computeUnmarshalInfo() {
+
+	// 加锁
 	u.lock.Lock()
 	defer u.lock.Unlock()
+
+
+	// 已初始化则直接返回
 	if u.initialized != 0 {
 		return
 	}
+
+	// 结构体类型
 	t := u.typ
+
+	// 结构体的字段总数
 	n := t.NumField()
 
 	// Set up the "not found" value for the unrecognized byte buffer.
@@ -284,10 +324,17 @@ func (u *unmarshalInfo) computeUnmarshalInfo() {
 		ityp  reflect.Type // interface type of oneof field
 		field field        // offset in containing message
 	}
+
+	// 保存 tag="protobuf_oneof" 类型的字段
 	var oneofFields []oneofField
 
+	// 遍历所有字段
 	for i := 0; i < n; i++ {
+
+		// 当前字段
 		f := t.Field(i)
+
+		// 内部字段
 		if f.Name == "XXX_unrecognized" {
 			// The byte slice used to hold unrecognized input is special.
 			if f.Type != reflect.TypeOf(([]byte)(nil)) {
@@ -319,6 +366,7 @@ func (u *unmarshalInfo) computeUnmarshalInfo() {
 			continue
 		}
 
+		// OneOf 字段
 		oneof := f.Tag.Get("protobuf_oneof")
 		if oneof != "" {
 			oneofFields = append(oneofFields, oneofField{f.Type, toField(&f)})
@@ -326,11 +374,14 @@ func (u *unmarshalInfo) computeUnmarshalInfo() {
 			continue
 		}
 
+		// 普通字段
 		tags := f.Tag.Get("protobuf")
+
 		tagArray := strings.Split(tags, ",")
 		if len(tagArray) < 2 {
 			panic("protobuf tag not enough fields in " + t.Name() + "." + f.Name + ": " + tags)
 		}
+
 		tag, err := strconv.Atoi(tagArray[1])
 		if err != nil {
 			panic("protobuf tag field not an integer: " + tagArray[1])
@@ -344,6 +395,8 @@ func (u *unmarshalInfo) computeUnmarshalInfo() {
 		}
 
 		// Extract unmarshaling function from the field (its type and tags).
+		//
+		// 获取 unmarshaler
 		unmarshal := fieldUnmarshaler(&f)
 
 		// Required field?
@@ -369,6 +422,7 @@ func (u *unmarshalInfo) computeUnmarshalInfo() {
 	case oneofWrappersIface:
 		oneofImplementers = m.XXX_OneofWrappers()
 	}
+
 	for _, v := range oneofImplementers {
 		tptr := reflect.TypeOf(v) // *Msg_X
 		typ := tptr.Elem()        // Msg_X
@@ -426,13 +480,24 @@ func (u *unmarshalInfo) computeUnmarshalInfo() {
 }
 
 // setTag stores the unmarshal information for the given tag.
-// tag = tag # for field
-// field/unmarshal = unmarshal info for that field.
-// reqMask = if required, bitmask for field position in required field list. 0 otherwise.
-// name = short name of the field.
+// 	tag = tag # for field
+// 	field/unmarshal = unmarshal info for that field.
+// 	reqMask = if required, bitmask for field position in required field list. 0 otherwise.
+// 	name = short name of the field.
 func (u *unmarshalInfo) setTag(tag int, field field, unmarshal unmarshaler, reqMask uint64, name string) {
-	i := unmarshalFieldInfo{field: field, unmarshal: unmarshal, reqMask: reqMask, name: name}
+
+	// 字段的反序列化信息
+	i := unmarshalFieldInfo{
+		field: field,
+		unmarshal: unmarshal,
+		reqMask: reqMask,
+		name: name,
+	}
+
+	// 字段总数
 	n := u.typ.NumField()
+
+	//
 	if tag >= 0 && (tag < 16 || tag < 2*n) { // TODO: what are the right numbers here?
 		for len(u.dense) <= tag {
 			u.dense = append(u.dense, unmarshalFieldInfo{})
@@ -440,9 +505,11 @@ func (u *unmarshalInfo) setTag(tag int, field field, unmarshal unmarshaler, reqM
 		u.dense[tag] = i
 		return
 	}
+
 	if u.sparse == nil {
 		u.sparse = map[uint64]unmarshalFieldInfo{}
 	}
+
 	u.sparse[uint64(tag)] = i
 }
 
@@ -1295,6 +1362,8 @@ func unmarshalBoolValue(b []byte, f pointer, w int) ([]byte, error) {
 	}
 	// TODO: check if x>1? Tests seem to indicate no.
 	v := x != 0
+
+	// toBool 是返回 bool 类型的指针，这里是完成对字段 f 的赋值
 	*f.toBool() = v
 	return b[n:], nil
 }

@@ -764,8 +764,12 @@ type scalarField struct {
 
 // t is a struct type.
 func buildDefaultMessage(t reflect.Type) (dm defaultMessage) {
+
 	sprop := GetProperties(t)
+
 	for _, prop := range sprop.Prop {
+
+		//
 		fi, ok := sprop.decoderTags.get(prop.Tag)
 		if !ok {
 			// XXX_unrecognized
@@ -773,6 +777,7 @@ func buildDefaultMessage(t reflect.Type) (dm defaultMessage) {
 		}
 		ft := t.Field(fi).Type
 
+		//
 		sf, nested, err := fieldDefault(ft, prop)
 		switch {
 		case err != nil:
@@ -792,6 +797,9 @@ func buildDefaultMessage(t reflect.Type) (dm defaultMessage) {
 // sf will be nil if the field can not have a default.
 // nestedMessage will be true if this is a nested message.
 // Note that sf.index is not set on return.
+//
+//
+//
 func fieldDefault(ft reflect.Type, prop *Properties) (sf *scalarField, nestedMessage bool, err error) {
 	var canHaveDefault bool
 	switch ft.Kind() {
@@ -889,13 +897,19 @@ func fieldDefault(ft reflect.Type, prop *Properties) (sf *scalarField, nestedMes
 
 // mapKeys returns a sort.Interface to be used for sorting the map keys.
 // Map fields may have key types of non-float scalars, strings and enums.
+//
+//
 func mapKeys(vs []reflect.Value) sort.Interface {
-	s := mapKeySorter{vs: vs}
+
+	s := mapKeySorter{
+		vs: vs,
+	}
 
 	// Type specialization per https://developers.google.com/protocol-buffers/docs/proto#maps.
 	if len(vs) == 0 {
 		return s
 	}
+
 	switch vs[0].Kind() {
 	case reflect.Int32, reflect.Int64:
 		s.less = func(a, b reflect.Value) bool { return a.Int() < b.Int() }

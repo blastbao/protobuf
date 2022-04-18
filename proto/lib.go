@@ -994,6 +994,8 @@ const (
 // This type is not subject to any compatibility guarantee.
 //
 // InternalMessageInfo 主要是用来缓存序列化和反序列化需要用到的信息。
+//
+//
 type InternalMessageInfo struct {
 	marshal   *marshalInfo		// marshal 信息
 	unmarshal *unmarshalInfo	// unmarshal 信息

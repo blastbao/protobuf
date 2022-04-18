@@ -351,12 +351,15 @@ func GetProperties(t reflect.Type) *StructProperties {
 }
 
 type (
+
 	oneofFuncsIface interface {
 		XXX_OneofFuncs() (func(Message, *Buffer) error, func(Message, int, int, *Buffer) (bool, error), func(Message) int, []interface{})
 	}
+
 	oneofWrappersIface interface {
 		XXX_OneofWrappers() []interface{}
 	}
+
 )
 
 // getPropertiesLocked requires that propertiesMu is held.

@@ -46,6 +46,26 @@ const unsafeAllowed = true
 // A field identifies a field in a struct, accessible from a pointer.
 // In this implementation, a field is identified by its byte offset from the start of the struct.
 //
+// 指向 struct 中 field 的字节偏移
+//
+//
+// 对于结构体，我们可以使用 reflect.StructField.Field(i) 方法获取到结构体中每个元素的信息。
+//
+// type StructField struct {
+//    Name string          // 字段名
+//    PkgPath string       // 字段路径
+//    Type      Type       // 数据类型，reflect.Type类型
+//    Tag       StructTag  // 字段的结构体标签
+//    Offset    uintptr    // 字段相对于结构体首地址的内存偏移量，string 类型会占据 16 个字节。
+//    Index     []int      // Type.FieldByIndex中的返回的索引值
+//    Anonymous bool       // 是否为匿名字段
+// }
+//
+//
+// 通常我们使用 unsafe.Pointer 来获取某个数据的地址，但是 unsafe.Pointer 是无法进行计算的，
+// 它只是个单纯的指针类型，因此无法计算偏移量，这时候就需要使用 uintptr 了。
+//
+// 因为 uintptr 底层是个整形，所以可以直接用来计算偏移量，而且 unsafe.Pointer 与 uintptr 是可以相互转换的。
 //
 type field uintptr
 
@@ -87,6 +107,7 @@ func toPointer(i *Message) pointer {
 	// Super-tricky - read pointer out of data word of interface value.
 	// Saves ~25ns over the equivalent:
 	// return valToPointer(reflect.ValueOf(*i))
+
 	return pointer{
 		p: (*[2]unsafe.Pointer)(unsafe.Pointer(i))[1],
 	}
@@ -126,6 +147,8 @@ func (p pointer) offset(f field) pointer {
 			panic("invalid field")
 		}
 	*/
+
+	// 根据 struct 的起始位置、field 的相对偏移，计算出 field 的地址。
 	return pointer{
 		p: unsafe.Pointer(uintptr(p.p) + uintptr(f)),
 	}

@@ -103,7 +103,7 @@ type marshalInfo struct {
 	// 是否已经完成初始化
 	initialized int32 // 0 -- only typ is set, 1 -- fully initialized
 
-	//
+	// ???
 	messageset bool // uses message set wire format
 
 	// 是否已经实现 marshal 接口
@@ -682,13 +682,17 @@ func (u *marshalInfo) computeMarshalInfo() {
 
 		// 处理以下几个 protobuf 自带的字段
 		switch f.Name {
+		// 缓存 size ，避免重复计算
 		case "XXX_sizecache":
 			u.sizecache = toField(&f)
+		// 未能识别的字段
 		case "XXX_unrecognized":
 			u.unrecognized = toField(&f)
+		// 扩展字段
 		case "XXX_InternalExtensions":
 			u.extensions = toField(&f)
 			u.messageset = f.Tag.Get("protobuf_messageset") == "1"
+		// 扩展字段
 		case "XXX_extensions":
 			u.v1extensions = toField(&f)
 		case "XXX_NoUnkeyedLiteral":
@@ -2994,6 +2998,8 @@ func (u *marshalInfo) appendExtensions(b []byte, ext *XXX_InternalExtensions, de
 //       required string message = 3;
 //     };
 //   }
+//
+//
 
 // sizeMessageSet computes the size of encoded data for a XXX_InternalExtensions field
 // in message set format (above).
@@ -3033,10 +3039,12 @@ func (u *marshalInfo) sizeMessageSet(ext *XXX_InternalExtensions) int {
 // appendMessageSet marshals a XXX_InternalExtensions field in message set format (above)
 // to the end of byte slice b.
 func (u *marshalInfo) appendMessageSet(b []byte, ext *XXX_InternalExtensions, deterministic bool) ([]byte, error) {
+
 	m, mu := ext.extensionsRead()
 	if m == nil {
 		return b, nil
 	}
+
 	mu.Lock()
 	defer mu.Unlock()
 
